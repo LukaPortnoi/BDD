@@ -421,7 +421,7 @@ BEGIN
         ISNULL((
             SELECT COUNT(*) 
             FROM DROPDATABASE.Inscripcion_Curso ic_rech
-            WHERE ic_rech.insc_curso = c.cur_id AND ic_rech.insc_estado = 'Rechazada' -- Ajustar string según tus datos
+            WHERE ic_rech.insc_curso = c.cur_id AND ic_rech.insc_estado = 'Rechazada'
         ), 0) as cant_rechazados
 
     FROM DROPDATABASE.Curso c
@@ -488,7 +488,6 @@ BEGIN
     JOIN DROPDATABASE.Curso c ON c.cur_id = f.final_curso
     JOIN DROPDATABASE.Alumno a ON a.alum_id = fa.final_alum
     
-    -- Dimensiones
     JOIN BI_DROPDATABASE.BI_Tiempo t_fin ON t_fin.anio = YEAR(f.final_fecha) AND t_fin.mes = MONTH(f.final_fecha)
     JOIN BI_DROPDATABASE.BI_Tiempo t_ini ON t_ini.anio = YEAR(c.cur_fecha_inicio) AND t_ini.mes = MONTH(c.cur_fecha_inicio)
     JOIN BI_DROPDATABASE.BI_Categorias cat ON cat.categoria_detalle = c.cur_categoria
@@ -501,7 +500,6 @@ BEGIN
         WHERE f_exist.tiempo_final = t_fin.tiempo_id 
           AND f_exist.final_sede = sed.sede_id
           AND f_exist.final_categoria = cat.categoria_id
-          -- Esta validación es aproximada, idealmente usarías un ID de staging
     );
 END
 GO
@@ -662,7 +660,7 @@ FROM BI_DROPDATABASE.BI_MET_Final f
 JOIN BI_DROPDATABASE.BI_Tiempo t_ini ON f.tiempo_inicio_curso = t_ini.tiempo_id
 JOIN BI_DROPDATABASE.BI_Tiempo t_fin ON f.tiempo_final = t_fin.tiempo_id
 JOIN BI_DROPDATABASE.BI_Categorias cat ON f.final_categoria = cat.categoria_id
-WHERE f.final_nota >= 4 -- Solo consideramos finales aprobados según enunciado implícito
+WHERE f.final_nota >= 4
 GROUP BY t_ini.anio, cat.categoria_detalle;
 GO
 
@@ -804,3 +802,4 @@ JOIN BI_DROPDATABASE.BI_Rango_Etario_Prof rp ON e.encuesta_rango_etario = rp.ran
 JOIN BI_DROPDATABASE.BI_Satisfaccion sat ON e.encuesta_satisfaccion = sat.satisfaccion_id
 GROUP BY t.anio, s.sede_nombre, rp.rango_detalle;
 GO
+
