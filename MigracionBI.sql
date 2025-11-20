@@ -1,4 +1,3 @@
--- Crear el esquema si no existe
 IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'BI_DROPDATABASE')
     EXEC('CREATE SCHEMA BI_DROPDATABASE AUTHORIZATION dbo;');
 GO
@@ -253,9 +252,9 @@ END
 GO
 
 /* 
-   ===========================================================
-   MIGRACION DE DATOS DESDE gd_esquema.Maestra
-   =========================================================== 
+   ======================
+   MIGRACION DE DATOS
+   ======================
 */
 
 CREATE OR ALTER FUNCTION BI_DROPDATABASE.ObtenerRangoEtarioAlum (@fecha_nac DATETIME2)
@@ -285,7 +284,6 @@ BEGIN
     ELSE IF @edad BETWEEN 36 AND 50 SET @rango = '35 - 50';
     ELSE SET @rango = '> 50';
     
-    -- Fallback por si hay menores de 25 (aunque el requerimiento no lo contempla, lo metemos en el primero)
     IF @rango IS NULL SET @rango = '25 - 35'; 
 
     RETURN @rango;
@@ -295,8 +293,6 @@ GO
 CREATE OR ALTER PROCEDURE BI_DROPDATABASE.Migrar_Dimensiones
 AS
 BEGIN
-    -- 1. Migrar TIEMPO
-    -- Recolectamos fechas de todas las tablas transaccionales relevantes
     INSERT INTO BI_DROPDATABASE.BI_Tiempo (anio, mes, cuatrimestre)
     SELECT DISTINCT 
         YEAR(fecha), 
@@ -319,27 +315,22 @@ BEGIN
         WHERE t.anio = YEAR(Fechas.fecha) AND t.mes = MONTH(Fechas.fecha)
     );
 
-    -- 2. Migrar SEDE
     INSERT INTO BI_DROPDATABASE.BI_Sede (sede_id, sede_nombre)
     SELECT sede_id, sede_nombre FROM DROPDATABASE.Sede
     WHERE sede_id NOT IN (SELECT sede_id FROM BI_DROPDATABASE.BI_Sede);
 
-    -- 3. Migrar CATEGORIAS
     INSERT INTO BI_DROPDATABASE.BI_Categorias (categoria_detalle)
     SELECT DISTINCT cur_categoria FROM DROPDATABASE.Curso
     WHERE cur_categoria NOT IN (SELECT categoria_detalle FROM BI_DROPDATABASE.BI_Categorias);
 
-    -- 4. Migrar TURNOS
     INSERT INTO BI_DROPDATABASE.BI_Turno (turno_detalle)
     SELECT DISTINCT cur_turno FROM DROPDATABASE.Curso
     WHERE cur_turno NOT IN (SELECT turno_detalle FROM BI_DROPDATABASE.BI_Turno);
 
-    -- 5. Migrar MEDIOS DE PAGO
     INSERT INTO BI_DROPDATABASE.BI_Medio_Pago (medio_detalle)
     SELECT DISTINCT pago_medio_pago FROM DROPDATABASE.Pago
     WHERE pago_medio_pago NOT IN (SELECT medio_detalle FROM BI_DROPDATABASE.BI_Medio_Pago);
 
-    -- 6. Cargar RANGOS ETARIOS (Valores Fijos según enunciado)
     IF NOT EXISTS (SELECT 1 FROM BI_DROPDATABASE.BI_Rango_Etario_Alum)
     BEGIN
         INSERT INTO BI_DROPDATABASE.BI_Rango_Etario_Alum (rango_detalle) VALUES ('< 25'), ('25 - 35'), ('35 - 50'), ('> 50');
@@ -350,7 +341,6 @@ BEGIN
         INSERT INTO BI_DROPDATABASE.BI_Rango_Etario_Prof (rango_detalle) VALUES ('25 - 35'), ('35 - 50'), ('> 50');
     END
 
-    -- 7. Cargar SATISFACCION (Valores Fijos según enunciado)
     IF NOT EXISTS (SELECT 1 FROM BI_DROPDATABASE.BI_Satisfaccion)
     BEGIN
         INSERT INTO BI_DROPDATABASE.BI_Satisfaccion (satisfaccion_detalle) VALUES ('Satisfechos'), ('Neutrales'), ('Insatisfechos');
@@ -409,9 +399,6 @@ AS
 BEGIN
     SET NOCOUNT ON;
 
-    -- Limpiamos la tabla por si se corre varias veces (opcional, según tu flujo)
-    -- DELETE FROM BI_DROPDATABASE.BI_MET_Cursadas; 
-
     INSERT INTO BI_DROPDATABASE.BI_MET_Cursadas (
         curs_id, 
         curs_tiempo, 
@@ -424,16 +411,13 @@ BEGIN
     SELECT 
         c.cur_id,
         t.tiempo_id,
-        c.cur_sede, -- Asumiendo que el ID de sede coincide, si no, hacer JOIN con BI_SEDE
+        c.cur_sede,
         cat.categoria_id,
-        
-        -- Cálculo de Aprobados
+
         SUM(CASE WHEN EstadoAlumno.EsAprobado = 1 THEN 1 ELSE 0 END) as cant_aprobados,
-        
-        -- Cálculo de Desaprobados (Estuvieron en la cursada pero no aprobaron)
+
         SUM(CASE WHEN EstadoAlumno.EsAprobado = 0 THEN 1 ELSE 0 END) as cant_desaprobados,
-        
-        -- Cálculo de Rechazados (Desde Inscripciones)
+
         ISNULL((
             SELECT COUNT(*) 
             FROM DROPDATABASE.Inscripcion_Curso ic_rech
@@ -443,14 +427,12 @@ BEGIN
     FROM DROPDATABASE.Curso c
     JOIN BI_DROPDATABASE.BI_Tiempo t ON t.anio = YEAR(c.cur_fecha_inicio) AND t.mes = MONTH(c.cur_fecha_inicio)
     JOIN BI_DROPDATABASE.BI_Categorias cat ON cat.categoria_detalle = c.cur_categoria
-    -- Hacemos un JOIN con una subquery que calcula el estado de cada alumno PARA ESE CURSO
     LEFT JOIN (
         SELECT 
             cur.cursa_curso,
             cur.cursa_alumno,
             CASE 
                 WHEN 
-                    -- Condición 1: TP Aprobado
                     EXISTS (
                         SELECT 1 FROM DROPDATABASE.Tp tp 
                         WHERE tp.tp_curso = cur.cursa_curso 
@@ -458,7 +440,6 @@ BEGIN
                           AND tp.tp_nota >= 4
                     )
                     AND 
-                    -- Condición 2: Todos los módulos aprobados
                     (
                         SELECT COUNT(*) FROM DROPDATABASE.Modulo m WHERE m.mod_curso = cur.cursa_curso
                     ) = (
@@ -480,8 +461,6 @@ BEGIN
 END
 GO
 
--- 2. Migración de Finales (CORREGIDO)
--- Se asegura de no perder registros por nulos y cruza correctamente las dimensiones.
 CREATE OR ALTER PROCEDURE BI_DROPDATABASE.Migrar_Fact_Final
 AS
 BEGIN
@@ -502,8 +481,8 @@ BEGIN
         cat.categoria_id,
         sed.sede_id,
         re.rango_alum_id,
-        ISNULL(fa.final_nota, 0), -- Manejo de nulos en nota
-        ISNULL(fa.presente, 0)    -- Manejo de nulos en presente
+        ISNULL(fa.final_nota, 0),
+        ISNULL(fa.presente, 0)   
     FROM DROPDATABASE.Final_Alumno fa
     JOIN DROPDATABASE.Final f ON f.final_id = fa.final_id
     JOIN DROPDATABASE.Curso c ON c.cur_id = f.final_curso
@@ -513,15 +492,10 @@ BEGIN
     JOIN BI_DROPDATABASE.BI_Tiempo t_fin ON t_fin.anio = YEAR(f.final_fecha) AND t_fin.mes = MONTH(f.final_fecha)
     JOIN BI_DROPDATABASE.BI_Tiempo t_ini ON t_ini.anio = YEAR(c.cur_fecha_inicio) AND t_ini.mes = MONTH(c.cur_fecha_inicio)
     JOIN BI_DROPDATABASE.BI_Categorias cat ON cat.categoria_detalle = c.cur_categoria
-    JOIN BI_DROPDATABASE.BI_Sede sed ON sed.sede_id = c.cur_sede -- Join explícito con tabla de sedes BI
+    JOIN BI_DROPDATABASE.BI_Sede sed ON sed.sede_id = c.cur_sede
     
-    -- Join con función de rango etario (Asegurarse que la función devuelva exactamente el texto de la tabla dimensión)
     LEFT JOIN BI_DROPDATABASE.BI_Rango_Etario_Alum re ON re.rango_detalle = BI_DROPDATABASE.ObtenerRangoEtarioAlum(a.alum_fecha_nacimiento)
 
-    -- Evitar duplicados si se corre varias veces (basado en un criterio de existencia lógico, aunque la tabla final tiene ID autoincremental)
-    -- NOTA: Al ser una tabla de hechos transaccional sin ID de negocio natural, 
-    -- es difícil validar "NOT IN" eficientemente sin un ID de staging. 
-    -- Si la tabla está vacía al inicio del script maestro, este WHERE no es crítico.
     WHERE NOT EXISTS (
         SELECT 1 FROM BI_DROPDATABASE.BI_MET_Final f_exist
         WHERE f_exist.tiempo_final = t_fin.tiempo_id 
@@ -532,7 +506,6 @@ BEGIN
 END
 GO
 
--- 5. Migración de Pagos (Depende de Facturas)
 CREATE OR ALTER PROCEDURE BI_DROPDATABASE.Migrar_Fact_Pagos
 AS
 BEGIN
@@ -553,7 +526,6 @@ BEGIN
 END
 GO
 
--- 6. Migración de Encuestas
 CREATE OR ALTER PROCEDURE BI_DROPDATABASE.Migrar_Fact_Encuestas
 AS
 BEGIN
@@ -602,7 +574,6 @@ BEGIN
 END
 GO
 
--- Ejecutar Migracion
 EXEC BI_DROPDATABASE.Migrar_Dimensiones;
 EXEC BI_DROPDATABASE.Migrar_Hechos;
 GO
@@ -610,8 +581,9 @@ GO
 USE [GD2C2025]
 GO
 
-/* ===========================================================
-   VISTAS DE BUSINESS INTELLIGENCE (BI)
+/* 
+   ===========================================================
+    VISTAS DE BUSINESS INTELLIGENCE (BI)
    =========================================================== 
 */
 
@@ -740,7 +712,6 @@ SELECT
     t_pago.cuatrimestre,
     COUNT(*) AS total_pagos,
     SUM(CASE 
-        -- Si año pago > año vencimiento O (año igual Y mes pago > mes vencimiento)
         WHEN (t_pago.anio > t_venc.anio) OR (t_pago.anio = t_venc.anio AND t_pago.mes > t_venc.mes) 
         THEN 1 ELSE 0 
     END) AS pagos_fuera_termino,
@@ -765,9 +736,7 @@ SELECT
     t.anio,
     t.mes,
     SUM(f.fact_total) AS facturacion_esperada,
-    
-    -- Corrección: Usamos LEFT JOIN para detectar facturas sin pago (p.pago_factura IS NULL)
-    -- en lugar de una subquery dentro del SUM.
+
     SUM(CASE WHEN p.pago_factura IS NULL THEN f.fact_total ELSE 0 END) AS monto_adeudado,
 
     CAST(
@@ -777,9 +746,6 @@ SELECT
 
 FROM BI_DROPDATABASE.BI_MET_Factura f
 JOIN BI_DROPDATABASE.BI_Tiempo t ON f.factura_vencimiento = t.tiempo_id
--- Hacemos LEFT JOIN con los IDs de pagos distintos.
--- Si no hay coincidencia (NULL), significa que esa factura no se pagó.
--- Usamos DISTINCT para que si una factura tiene 2 pagos parciales, no duplique el monto de la factura en el conteo.
 LEFT JOIN (
     SELECT DISTINCT pago_factura 
     FROM BI_DROPDATABASE.BI_MET_Pagos
@@ -818,13 +784,10 @@ SELECT
     rp.rango_detalle AS rango_etario_profesor,
     COUNT(*) AS total_encuestas,
     
-    -- Porcentaje Satisfechos
     CAST(SUM(CASE WHEN sat.satisfaccion_detalle = 'Satisfechos' THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS DECIMAL(10,2)) AS pct_satisfechos,
     
-    -- Porcentaje Insatisfechos
     CAST(SUM(CASE WHEN sat.satisfaccion_detalle = 'Insatisfechos' THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS DECIMAL(10,2)) AS pct_insatisfechos,
 
-    -- Índice final
     CAST(
         (
             (SUM(CASE WHEN sat.satisfaccion_detalle = 'Satisfechos' THEN 1 ELSE 0 END) * 100.0 / COUNT(*)) 
