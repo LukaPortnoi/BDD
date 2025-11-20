@@ -689,7 +689,7 @@ SELECT
     t.anio,
     t.cuatrimestre,
     s.sede_nombre,
-    COUNT(*) AS total_finales,
+    COUNT(*) AS total_inscriptos,
     SUM(CASE WHEN f.final_presente = 0 THEN 1 ELSE 0 END) AS total_ausentes,
     CAST(
         (SUM(CASE WHEN f.final_presente = 0 THEN 1 ELSE 0 END) * 100.0) / 
@@ -802,4 +802,5 @@ JOIN BI_DROPDATABASE.BI_Rango_Etario_Prof rp ON e.encuesta_rango_etario = rp.ran
 JOIN BI_DROPDATABASE.BI_Satisfaccion sat ON e.encuesta_satisfaccion = sat.satisfaccion_id
 GROUP BY t.anio, s.sede_nombre, rp.rango_detalle;
 GO
+
 
